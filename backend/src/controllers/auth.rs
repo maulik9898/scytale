@@ -15,6 +15,7 @@ use crate::{
     error::AppError,
     models::{
         self,
+        auth::LoginResponse,
         jwt::{Claims, TokenType},
         user::{Role, UserCreate, UserEntity, UserLogin},
     },
@@ -26,37 +27,11 @@ use crate::{
 pub struct AuthController {}
 
 impl AuthController {
-    pub async fn register(
-        State(state): State<Arc<Mutex<AppState>>>,
-        Json(payload): Json<UserCreate>,
-    ) -> Result<Json<Value>, AppError> {
-        let state = state.lock().await;
-        let user = get_user_by_email(&state.pool, payload.email.as_str()).await?;
-
-        if let Some(data) = user {
-            return Err(AppError::UserAlreadyExits);
-        }
-
-        let mut user = payload.clone();
-
-        let user = create_user(&state.pool, &mut user, Role::USER).await?;
-
-        let access_token = encode_token(&user, &state.keys, TokenType::AccessToken).await?;
-        let refresh_token = encode_token(&user, &state.keys, TokenType::RefreshToken).await?;
-
-        Ok(Json(json!({
-            "message": "User created successfully",
-            "id": user.id,
-            "role": user.role,
-            "access_token": access_token,
-            "refresh_token": refresh_token
-        })))
-    }
 
     pub async fn login(
         State(state): State<Arc<Mutex<AppState>>>,
         Json(payload): Json<UserLogin>,
-    ) -> Result<Json<Value>, AppError> {
+    ) -> Result<Json<LoginResponse>, AppError> {
         let state = state.lock().await;
         let user = get_user_by_email(&state.pool, payload.email.as_str()).await?;
 
@@ -68,13 +43,15 @@ impl AuthController {
                 let refresh_token =
                     encode_token(&user, &state.keys, TokenType::RefreshToken).await?;
 
-                return Ok(Json(json!({
-                    "message": "User logged in successfully",
-                    "id": user.id,
-                    "role": user.role,
-                    "access_token": access_token,
-                    "refresh_token": refresh_token
-                })));
+                let response = LoginResponse {
+                    message: "User created successfully".to_string(),
+                    id: user.id,
+                    role: user.role,
+                    access_token,
+                    refresh_token,
+                };
+
+                return Ok(Json(response));
             }
 
             return Err(AppError::WrongCredential);
@@ -86,7 +63,7 @@ impl AuthController {
     pub async fn authenticated(
         user: UserEntity,
         State(state): State<Arc<Mutex<AppState>>>,
-    ) -> Result<Json<Value>, AppError> {
-        Ok(Json(json!(user)))
+    ) -> Result<Json<UserEntity>, AppError> {
+        Ok(Json(user))
     }
 }

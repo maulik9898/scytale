@@ -9,7 +9,9 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::error::AppError;
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, sqlx::FromRow, sqlx::Type)]
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq, sqlx::FromRow, sqlx::Type,
+)]
 pub struct UserEntity {
     pub id: i64,
     pub email: String,
@@ -19,28 +21,28 @@ pub struct UserEntity {
     pub role: Role,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
 pub struct UserCreate {
     pub email: String,
     pub name: String,
     pub password: String,
-    pub role: Option<Role>,
+    pub role: Role,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
 pub struct UserLogin {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, sqlx::Type)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq, sqlx::Type)]
 pub enum Role {
     ADMIN,
     #[default]
     USER,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Client {
     pub id: String,
     pub user_id: i64,
@@ -75,7 +77,7 @@ impl From<UserCreate> for UserEntity {
             email: request.email,
             name: request.name,
             password: request.password,
-            role: request.role.unwrap_or_default(),
+            role: request.role,
         }
     }
 }

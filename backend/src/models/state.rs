@@ -35,23 +35,23 @@ impl AppState {
     }
 
     pub async fn add_client(&mut self, uid: i64, client: Client, tx: UnboundedSender<Message>) {
-        match self.users.get_mut(&uid) {
-            Some(user) => {
-                user.insert(client.id.clone(), (client, tx));
-            }
-            None => {
-                let mut user = HashMap::new();
-                user.insert(client.id.clone(), (client, tx));
-                self.users.insert(uid, user);
-            }
-        };
+        if let Some(user) = self.users.get_mut(&uid) {
+            user.insert(client.id.clone(), (client, tx));
+        } else {
+            let mut user = HashMap::new();
+            user.insert(client.id.clone(), (client, tx));
+            self.users.insert(uid, user);
+        }
     }
 
     pub async fn delete_client(&mut self, uid: &i64, client_id: &str) {
-        if let Some(user) = self.users.get_mut(uid) {
-            user.remove(client_id);
-        } else {
-            tracing::error!("User not found");
-        }
+        self.users.get_mut(uid).map_or_else(
+            || {
+                tracing::debug!("User not found");
+            },
+            |user| {
+                user.remove(client_id);
+            },
+        );
     }
 }

@@ -31,7 +31,7 @@ impl Claims {
         Self {
             email: user.email.clone(),
             role: user.role.clone(),
-            id: user.id.clone(),
+            id: user.id,
             exp: exp.timestamp(),
             token_type,
         }

@@ -34,11 +34,9 @@ impl TokenController {
         Json(payload): Json<TokeRefresh>,
     ) -> Result<Json<Value>, AppError> {
         let state = state.lock().await;
-        let claims = decode_token(&payload.refresh_token.as_str(), &state.keys).await?;
+        let claims = decode_token(payload.refresh_token.as_str(), &state.keys).await?;
         match claims.token_type {
-            TokenType::AccessToken => {
-                return Err(AppError::NotRefreshToken);
-            }
+            TokenType::AccessToken => Err(AppError::NotRefreshToken),
             TokenType::RefreshToken => {
                 let user =
                     get_user_by_id_email(&state.pool, claims.id, claims.email.as_str()).await?;
@@ -47,12 +45,12 @@ impl TokenController {
                 let refresh_token =
                     encode_token(&user, &state.keys, TokenType::RefreshToken).await?;
 
-                return Ok(Json(json!({
+                Ok(Json(json!({
                     "id": user.id,
                     "role": user.role,
                     "access_token": access_token,
                     "refresh_token": refresh_token
-                })));
+                })))
             }
         }
     }

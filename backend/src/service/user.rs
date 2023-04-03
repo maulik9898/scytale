@@ -10,13 +10,13 @@ use sqlx::{query, query_as};
 
 pub async fn create_user(
     pool: &SqlitePool,
-    user: &mut UserCreate,
-    role: Role,
+    user: &mut UserCreate
 ) -> Result<UserEntity, AppError> {
     user.hash_password()?;
     let email = &user.email;
     let name = &user.name;
     let password = &user.password;
+    let role = &user.role;
     let record = query_as!(
         UserEntity,
         r#"INSERT INTO users (email, name, password, role) 
@@ -81,3 +81,37 @@ pub async fn get_user_by_email(
     .await?;
     Ok(user)
 }
+
+pub async fn chech_or_add_admin(
+    pool: &SqlitePool,
+    admin_email: &str,
+    admin_password: &str,
+    admin_name: &str,
+) {
+    let admin = get_user_by_email(pool, admin_email).await;
+
+    if let Ok(Some(admin)) = admin {
+        tracing::debug!("User already exists");
+        return;
+    }
+
+    if let Err(err) = admin {
+        tracing::error!("Unable to get user : {}", err);
+        return;
+    }
+
+    if let Ok(None) = admin {
+        let mut admin = UserCreate {
+            email: admin_email.to_string(),
+            password: admin_password.to_string(),
+            name: admin_name.to_string(),
+            role: Role::ADMIN,
+        };
+
+        if let Err(_) = create_user(pool, &mut admin).await {
+            tracing::error!("Unable to create admin user");
+        }
+    }
+}
+
+

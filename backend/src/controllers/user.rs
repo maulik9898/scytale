@@ -16,17 +16,17 @@ impl UserController {
     pub async fn get_clients(
         State(state): State<Arc<Mutex<AppState>>>,
         user: UserEntity,
-    ) -> Result<Json<Value>, AppError> {
+    ) -> Result<Json<Vec<Client>>, AppError> {
         let state = state.lock().await;
         let clients = state.users.get(&user.id);
         if let Some(clients) = clients {
-            let clients = clients
+            let c = clients
+                .clone()
                 .iter()
                 .map(|(_, (client, _))| client.clone())
-                .map(|c| c)
                 .collect::<Vec<_>>();
-            return Ok(Json(json!(clients)));
+            return Ok(Json(c));
         }
-        Ok(Json(json!([])))
+        Ok(Json([].to_vec()))
     }
 }

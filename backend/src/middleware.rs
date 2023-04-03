@@ -39,7 +39,7 @@ where
             .await
             .map_err(|_| AppError::MissingToken)?;
 
-        let state = AppStateType::from_ref(&state);
+        let state = AppStateType::from_ref(state);
         let state = state.lock().await;
 
         let claims = decode_token(bearer.token(), &state.keys).await?;

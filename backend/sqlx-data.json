@@ -1,0 +1,171 @@
+{
+  "db": "SQLite",
+  "705110f8eaa6cef03e1dc9300b16f7c8a41bd167bdb540c2499fb76765088ed7": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id!: i64",
+          "ordinal": 0,
+          "type_info": "Int64"
+        },
+        {
+          "name": "name!:String",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "email!: String",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "password!: String",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "role!: Role",
+          "ordinal": 4,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        true,
+        false,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Right": 1
+      }
+    },
+    "query": "SELECT \n            id as \"id!: i64\", \n            name as \"name!:String\", \n            email as \"email!: String\", \n            password as \"password!: String\", \n            role as \"role!: Role\"\n        FROM users WHERE email = ?"
+  },
+  "82d18e7527c9a2ae4374ad29c82e7055058ed6acd47add0b590a8875299ae5b8": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id!: i64",
+          "ordinal": 0,
+          "type_info": "Int64"
+        },
+        {
+          "name": "name!:String",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "email!: String",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "password!: String",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "role!: Role",
+          "ordinal": 4,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        true,
+        true,
+        true,
+        true
+      ],
+      "parameters": {
+        "Right": 4
+      }
+    },
+    "query": "INSERT INTO users (email, name, password, role) \n            VALUES (?, ?, ?, ?) \n            RETURNING id as \"id!: i64\", name as \"name!:String\", email as \"email!: String\", password as \"password!: String\", role as \"role!: Role\" "
+  },
+  "c463148bf1b4bc786e06862120be2fd787b5f565f4be6b5c897de20bad8e6940": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int64"
+        },
+        {
+          "name": "name",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "email",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "password",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "role!: Role",
+          "ordinal": 4,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Right": 2
+      }
+    },
+    "query": "SELECT id, name, email, password, role as \"role!: Role\" FROM users WHERE id = ? AND email = ?"
+  },
+  "ca0f1bad32f644e93a780f9fdfddf868d04aa693f0750a6d8fefedfd628fd1de": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int64"
+        },
+        {
+          "name": "name",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "email",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "password",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "role!: Role",
+          "ordinal": 4,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Right": 1
+      }
+    },
+    "query": "SELECT id, name, email, password , role as \"role!: Role\" FROM users WHERE id = ?"
+  }
+}

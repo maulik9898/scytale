@@ -44,7 +44,7 @@ impl WebsocketController {
         }
         drop(u_state);
 
-        Ok(ws.on_upgrade(|socket| WebsocketController::handle_socket(socket, client, state)))
+        Ok(ws.on_upgrade(|socket| Self::handle_socket(socket, client, state)))
     }
 
     pub async fn handle_socket(socket: WebSocket, client: Client, state: Arc<Mutex<AppState>>) {
@@ -53,42 +53,44 @@ impl WebsocketController {
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
         let (mut sender, mut receiver) = socket.split();
-        let t_state = state.clone();
-        let msg_state = state.clone();
 
         let u_state = state.clone();
-
-        let uid = client.user_id;
         let client_id = client.id.clone();
-        let t_client_id = client_id.clone();
+        let uid = client.user_id;
+        let client_id2 = client.id.clone();
+
         {
             u_state.lock().await.add_client(uid, client, tx).await;
         }
 
-        tokio::task::spawn(async move {
+        let mut send_task = tokio::task::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if let Err(e) = sender.send(msg).await {
                     tracing::error!("Error sending message: {}", e);
-                    {
-                        t_state.lock().await.delete_client(&uid, &t_client_id).await;
-                    }
                     break;
                 }
             }
         });
 
-        tokio::task::spawn(async move {
+        let recv_state = state.clone();
+        let mut recv_task = tokio::task::spawn(async move {
             while let Some(Ok(msg)) = receiver.next().await {
                 if let Err(_) =
-                    WebsocketController::handle_message(msg, state.clone(), &uid, &client_id).await
+                    Self::handle_message(msg, recv_state.clone(), &uid, &client_id).await
                 {
                     tracing::debug!("Error handling message");
                     break;
                 }
             }
-
-            msg_state.lock().await.delete_client(&uid, &client_id).await;
         });
+        tokio::select! {
+            _ = (&mut send_task) => recv_task.abort(),
+            _ = (&mut recv_task) => send_task.abort(),
+        };
+
+        let state = state.clone();
+        let mut state = state.lock().await;
+        state.delete_client(&uid, &client_id2).await;
     }
 
     pub async fn handle_message(
@@ -112,14 +114,7 @@ impl WebsocketController {
                 tracing::debug!("Received pong: {:?}", msg);
                 Ok(())
             }
-            Message::Close(_) => {
-                let u_state = state.clone();
-                tracing::debug!("Received close");
-
-                u_state.lock().await.delete_client(uid, client_id).await;
-
-                Err(())
-            }
+            Message::Close(_) => Err(()),
             Message::Binary(_) => {
                 tracing::debug!("Received binary");
                 Ok(())
@@ -128,7 +123,7 @@ impl WebsocketController {
                 tracing::debug!("Received text: {}", text);
                 let mut state = state.lock().await;
 
-                let user = state.users.get_mut(&uid);
+                let user = state.users.get_mut(uid);
                 if let Some(user) = user {
                     for (_, (client, tx)) in user.iter_mut() {
                         if client.id == client_id.clone() {

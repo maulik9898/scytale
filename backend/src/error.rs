@@ -20,6 +20,7 @@ pub enum AppError {
     UserDoesNotExist,
     UserAlreadyExits,
     AlreadyConnected,
+    EmptyPayload,
     DatabaseError(sqlx::Error),
 }
 
@@ -47,6 +48,10 @@ impl IntoResponse for AppError {
             Self::NotAccessToken => (StatusCode::BAD_REQUEST, "not an access token".to_string()),
             Self::NotRefreshToken => (StatusCode::BAD_REQUEST, "not a refresh token".to_string()),
             Self::AlreadyConnected => (StatusCode::BAD_REQUEST, "already connected".to_string()),
+            Self::EmptyPayload => (
+                StatusCode::BAD_REQUEST,
+                "One of the field is empty".to_string(),
+            ),
         };
         (status, Json(json!({ "error": err_msg }))).into_response()
     }

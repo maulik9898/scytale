@@ -6,13 +6,17 @@ use std::sync::Arc;
 
 use axum::extract::ws::Message;
 use axum::extract::FromRef;
-use axum::routing::{get, post};
+use axum::http::StatusCode;
+use axum::routing::get_service;
+use axum::routing::{get, post, Route};
 use axum::Router;
 
+use error::AppError;
 use models::jwt::Keys;
-use models::user::Client;
+use models::user::{Client, Role, UserCreate};
+use service::user::{chech_or_add_admin, create_user, get_user_by_email};
 use sqlx::migrate::MigrateDatabase;
-use sqlx::Sqlite;
+use sqlx::{Sqlite, SqlitePool};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
@@ -24,7 +28,9 @@ mod models;
 mod service;
 mod utils;
 
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utils::{get_default_router, get_state, setup_db};
 
 use crate::controllers::admin::AdminController;
 use crate::controllers::auth::AuthController;
@@ -34,126 +40,330 @@ use crate::controllers::websocket::WebsocketController;
 use crate::middleware::is_admin;
 use crate::models::state::AppState;
 
+pub struct Scytale {
+    pub addr: SocketAddr,
+    pub db_url: String,
+    pub jwt_secret: String,
+    pub admin_email: String,
+    pub admin_password: String,
+    pub admin_name: String,
+}
 
-pub async fn serve(addr: SocketAddr, db_url: &str, secret: &str) {
-    tracing_subscriber::registry()
+impl Scytale {
+    pub fn new(
+        addr: SocketAddr,
+        db_url: String,
+        jwt_secret: String,
+        admin_email: String,
+        admin_password: String,
+        admin_name: String,
+    ) -> Self {
+        Self {
+            addr,
+            db_url,
+            jwt_secret,
+            admin_email,
+            admin_password,
+            admin_name,
+        }
+    }
+
+    pub async fn start(&mut self) {
+        tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| "debug".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
+        let pool = setup_db(&self.db_url).await;
+        chech_or_add_admin(
+            &pool,
+            &self.admin_email,
+            &self.admin_password,
+            &self.admin_name,
+        )
+        .await;
+        let state = get_state(pool, &self.jwt_secret);
 
-    let db_url = db_url.to_string();
+        let app = get_default_router(state.clone());
 
-    if Sqlite::database_exists(&db_url)
-        .await
-        .expect("unable to check if database exists")
-    {
-        tracing::debug!("Database exists");
-    } else {
-        tracing::debug!("Database does not exist");
-        Sqlite::create_database(&db_url)
+        tracing::info!("Starting server at {}", self.addr);
+
+        axum::Server::bind(&self.addr)
+            .serve(app.into_make_service())
             .await
-            .expect("unable to create database");
+            .expect("Failed to start server");
     }
-
-    let pool = sqlx::SqlitePool::connect(&db_url)
-        .await
-        .expect("unable to connect to database");
-    sqlx::migrate!()
-        .run(&pool)
-        .await
-        .expect("unable to run migrations");
-
-    let cors = CorsLayer::new().allow_origin(Any);
-
-    let app_state = AppState::new(pool, secret);
-
-    let app_state = Arc::new(Mutex::new(app_state));
-
-    let token_routes = Router::new()
-        .route("/token/authenticate", get(TokenController::authenticated))
-        .route("/token", post(TokenController::refresh));
-
-    let admin_routes = Router::new()
-        .route("/admin", get(AdminController::admin))
-        .route_layer(axum::middleware::from_fn_with_state(
-            app_state.clone(),
-            is_admin,
-        ));
-
-    let user_route = Router::new().route("/user/client", get(UserController::get_clients));
-
-    let auth_routes = Router::new()
-        .route("/register", post(AuthController::register))
-        .route("/authenticated", get(AuthController::authenticated))
-        .route("/login", post(AuthController::login));
-
-    let websocket_routes = Router::new().route("/ws", get(WebsocketController::ws_handler));
-
-    let app = Router::new()
-        .merge(admin_routes)
-        .merge(auth_routes)
-        .merge(token_routes)
-        .merge(websocket_routes)
-        .merge(user_route)
-        .layer(CorsLayer::permissive())
-        // .layer(TraceLayer::new_for_http()
-        .with_state(app_state.clone());
-
-    tracing::debug!("listening on {}", addr);
-
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .expect("Failed to start server");
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::models::state::AppStateType;
+mod routes {
+    use crate::models::{
+        auth::LoginResponse,
+        user::{Role, UserCreate, UserLogin},
+    };
 
     use super::*;
-    use sqlx::{Connection, Executor, SqliteConnection};
-    use tokio::sync::mpsc;
+    use axum::{http::StatusCode, Json};
+    use axum_test_helper::{RequestBuilder, TestClient};
+    use sqlx::SqlitePool;
 
-    async fn create_test_app_state() -> AppStateType {
-        let db_url = "sqlite::memory:";
+    const ADMIN_EMAIL: &str = "maulikp";
+    const ADMIN_PASSWORD: &str = "password";
+    const ADMIN_NAME: &str = "Maulik Patel";
+
+    async fn setup_db() -> SqlitePool {
+        let db_url = "sqlite::memory:".to_string();
+
+        if Sqlite::database_exists(&db_url)
+            .await
+            .expect("unable to check if database exists")
+        {
+            tracing::debug!("Database exists");
+        } else {
+            tracing::debug!("Database does not exist");
+            Sqlite::create_database(&db_url)
+                .await
+                .expect("unable to create database");
+        }
+
         let pool = sqlx::SqlitePool::connect(&db_url)
             .await
-            .expect("unable to connect to in-memory database");
+            .expect("unable to connect to database");
         sqlx::migrate!()
             .run(&pool)
             .await
             .expect("unable to run migrations");
 
-        let secret = "test_secret";
-        let app_state = AppState::new(pool, secret);
-        Arc::new(Mutex::new(app_state))
+        pool
+    }
+
+    async fn setup_client(pool: SqlitePool) -> TestClient {
+        let app_state = AppState::new(pool, "secret");
+
+        let app_state = Arc::new(Mutex::new(app_state));
+
+        let router = get_default_router(app_state);
+        let client = TestClient::new(router);
+        client
+    }
+
+    async fn admin_login(client: &TestClient) -> String {
+        let user = UserLogin {
+            email: ADMIN_EMAIL.to_string(),
+            password: ADMIN_PASSWORD.to_string(),
+        };
+        let res = client.post("/api/login").json(&user).send().await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let access_token = res.json::<LoginResponse>().await.access_token;
+        let h = format!("Bearer {}", access_token);
+        h
+    }
+
+    //TODO: support for custom Role
+    async fn create_user() -> UserCreate {
+        let create_user = UserCreate {
+            email: "maulikp1".to_string(),
+            password: "password".to_string(),
+            name: "Maulik Patel".to_string(),
+            role: Role::USER,
+        };
+        create_user
     }
 
     #[tokio::test]
-    async fn test_add_delete_client() {
-        let app_state = create_test_app_state().await;
-        let mut app_state = app_state.lock().await;
+    async fn test_unauthenticated() {
+        let pool = setup_db().await;
+        let client = setup_client(pool).await;
+        let res = client.get("/api/authenticated").send().await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+    #[tokio::test]
+    async fn test_authenticated() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = UserCreate {
+            email: "maulikp1".to_string(),
+            password: "password".to_string(),
+            name: "Maulik Patel".to_string(),
+            role: Role::USER,
+        };
+        let res = client
+            .post("/api/admin/register")
+            .header("Authorization", h)
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let access_token = res.json::<LoginResponse>().await.access_token;
+        let h = format!("Bearer {}", access_token);
+        let res = client
+            .get("/api/authenticated")
+            .header("Authorization", h)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
 
-        let (tx, _) = mpsc::unbounded_channel::<Message>();
-        let uid = 1;
-        let client_id = "client_id".to_string();
-        let client_name = "client_name".to_string();
-        let client = Client::new(client_id.clone(), uid, client_name.clone(), None);
+    #[tokio::test]
+    async fn test_login() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = create_user().await;
+        let res = client
+            .post("/api/admin/register")
+            .json(&create_user)
+            .header("Authorization", h)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let user = UserLogin {
+            email: create_user.email.to_string(),
+            password: create_user.password.to_string(),
+        };
+        let res = client.post("/api/login").json(&user).send().await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let access_token = res.json::<LoginResponse>().await.access_token;
+        let h = format!("Bearer {}", access_token);
+        let res = client
+            .get("/api/authenticated")
+            .header("Authorization", h)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
 
-        app_state.add_client(uid, client, tx.clone()).await;
+    #[tokio::test]
+    async fn test_register() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = create_user().await;
+        let res = client
+            .post("/api/admin/register")
+            .json(&create_user)
+            .header("Authorization", h)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
 
-        assert_eq!(app_state.users.len(), 1);
-        assert_eq!(app_state.users.get(&uid).unwrap().len(), 1);
+    #[tokio::test]
+    async fn test_register_no_admin() {
+        let pool = setup_db().await;
+        let client = setup_client(pool).await;
+        let create_user = create_user().await;
+        let res = client
+            .post("/api/admin/register")
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
 
-        let stored_client = app_state.get_client(&uid, &client_id).await.unwrap();
-        assert_eq!(stored_client.0.id, client_id);
-        assert_eq!(stored_client.0.name, client_name);
+    #[tokio::test]
+    async fn test_register_no_password() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = UserCreate {
+            email: "maulikp1".to_string(),
+            password: "".to_string(),
+            name: "Maulik Patel".to_string(),
+            role: Role::USER,
+        };
+        let res = client
+            .post("/api/admin/register")
+            .header("Authorization", &h)
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
 
-        app_state.delete_client(&uid, &client_id).await;
-        assert_eq!(app_state.users.len(), 1);
-        assert_eq!(app_state.users.get(&uid).unwrap().len(), 0);
+    #[tokio::test]
+    async fn test_register_no_email() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = UserCreate {
+            email: "".to_string(),
+            password: "password".to_string(),
+            name: "Maulik Patel".to_string(),
+            role: Role::USER,
+        };
+        let res = client
+            .post("/api/admin/register")
+            .header("Authorization", &h)
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_register_no_name() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = UserCreate {
+            email: "maulikp1".to_string(),
+            password: "password".to_string(),
+            name: "".to_string(),
+            role: Role::USER,
+        };
+        let res = client
+            .post("/api/admin/register")
+            .header("Authorization", &h)
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_register_duplicate() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+        let h = admin_login(&client).await;
+        let create_user = create_user().await;
+        let res = client
+            .post("/api/admin/register")
+            .header("Authorization", &h)
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let res = client
+            .post("/api/admin/register")
+            .header("Authorization", &h)
+            .json(&create_user)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_admin() {
+        let pool = setup_db().await;
+        chech_or_add_admin(&pool, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME).await;
+        let client = setup_client(pool).await;
+
+        let h = admin_login(&client).await;
+        let res = client
+            .get("/api/admin")
+            .header("Authorization", h)
+            .send()
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
     }
 }
